@@ -1,6 +1,6 @@
 {
   "name": "stock-app",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Realtime stock monitor",
   "main": "terminal-stock-alert.js",
   "bin": "terminal-stock-alert.js",
@@ -19,6 +19,7 @@
     ]
   },
   "dependencies": {
-    "axios": "^1.13.6"
+    "axios": "^1.13.6",
+    "pkg": "^5.8.1"
   }
 }
