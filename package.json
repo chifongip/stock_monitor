@@ -1,6 +1,6 @@
 {
   "name": "stock-app",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Realtime stock monitor",
   "main": "terminal-stock-alert.js",
   "bin": "terminal-stock-alert.js",

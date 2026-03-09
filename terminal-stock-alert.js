@@ -9,9 +9,9 @@ const CONFIG_FILE = './stocks.json';
 
 // 1. Load configuration (Stocks, Preferences, Targets)
 let config = {
-    stocks: ['00700', '00005'],
-    targets: {},      // { "00700": 550.0 }
-    lastAlerted: {},  // { "00700": timestamp }
+    stocks: ['00700', '00005', '02800'],  // Default includes your Tracker Fund
+    targets: {},
+    lastAlerted: {},
     showNames: true,
     compactMode: false
 };
@@ -19,13 +19,12 @@ let config = {
 if (fs.existsSync(CONFIG_FILE)) {
     try {
         const fileData = JSON.parse(fs.readFileSync(CONFIG_FILE));
-        // Handle array-only legacy files
         if (Array.isArray(fileData)) config.stocks = fileData;
         else config = { ...config, ...fileData };
     } catch (e) { saveConfig(); }
 }
 
-// 2. Setup Interface (Using terminal: true for better cursor handling)
+// 2. Setup Interface
 const rl = readline.createInterface({ 
     input: process.stdin, 
     output: process.stdout, 
@@ -46,7 +45,7 @@ rl.on('line', (line) => {
         delete config.lastAlerted[code];
     } else if (cmd === 't' && code && val) {
         config.targets[code] = parseFloat(val);
-        delete config.lastAlerted[code]; // Reset cooldown when target changes
+        delete config.lastAlerted[code];
     } else if (cmd === 'ua' && code) {
         delete config.targets[code];
         delete config.lastAlerted[code];
@@ -63,7 +62,7 @@ function saveConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(config));
 }
 
-// 3. Data Fetching (Money18 Real-time)
+// 3. Data Fetching – ENHANCED with more fields for composite signals
 async function getHKRealTimePrice(code) {
     const url = `https://realtime-money18-cdn.on.cc/securityQuote/genStockDetailHKJSON.php?stockcode=${code}`;
     try {
@@ -76,6 +75,7 @@ async function getHKRealTimePrice(code) {
             .replace(/\r?\n|\r/g, "").replace(/\t/g, "").replace(/\s{2,}/g, " ");
         
         const data = JSON.parse(jsonString);
+
         return {
             code: code,
             name: data.daily.nameChi || data.daily.name,
@@ -83,12 +83,87 @@ async function getHKRealTimePrice(code) {
             preClose: parseFloat(data.daily.preCPrice),
             change: data.calculation.change,
             percent: data.calculation.pctChange + "%",
-            time: data.real.ltt
+            time: data.real.ltt,
+            // === Core indicators (already in API) ===
+            ma10: data.daily.ma10 ? parseFloat(data.daily.ma10) : null,
+            ma20: data.daily.ma20 ? parseFloat(data.daily.ma20) : null,
+            ma50: data.daily.ma50 ? parseFloat(data.daily.ma50) : null,
+            rsi14: data.daily.rsi14 ? parseFloat(data.daily.rsi14) : null,
+            // === NEW fields for richer composite analysis ===
+            wk52High: data.daily.wk52High ? parseFloat(data.daily.wk52High) : null,
+            wk52Low: data.daily.wk52Low ? parseFloat(data.daily.wk52Low) : null,
+            tenDayHigh: data.daily.tenDayHigh ? parseFloat(data.daily.tenDayHigh) : null,
+            tenDayLow: data.daily.tenDayLow ? parseFloat(data.daily.tenDayLow) : null,
+            dayHigh: data.real.dyh ? parseFloat(data.real.dyh) : null,
+            dayLow: data.real.dyl ? parseFloat(data.real.dyl) : null,
+            volume: data.real.vol ? parseFloat(data.real.vol) : 0
         };
-    } catch (e) { return null; }
+    } catch (e) {
+        console.error(chalk.red(`Error fetching ${code}`));
+        return null;
+    }
 }
 
-// 4. Alert Logic (Handles both Crossing UP and Crossing DOWN)
+// 4. COMPOSITE TECHNICAL SIGNAL – Works for ALL stocks
+// Uses: MA trend (Murphy) + RSI momentum (Wilder) + 52w range + 10-day range + price action
+function getTechnicalSignal(stock) {
+    if (!stock.ma10 || !stock.ma20 || !stock.ma50 || !stock.rsi14) {
+        return chalk.gray('N/A');
+    }
+
+    const p = stock.price;
+    const rsi = stock.rsi14;
+    let score = 0;   // -100 (strong sell) to +100 (strong buy)
+
+    // 1. MA Trend (weight 40%)
+    const aboveAllMA = p > stock.ma10 && p > stock.ma20 && p > stock.ma50;
+    const belowAllMA = p < stock.ma10 && p < stock.ma20 && p < stock.ma50;
+    if (aboveAllMA) score += 40;
+    else if (belowAllMA) score -= 40;
+    else if (p > stock.ma50) score += 15;
+    else score -= 15;
+
+    // 2. RSI Momentum (weight 30%)
+    if (rsi > 70) score -= 30;           // overbought
+    else if (rsi < 30) score += 30;      // oversold
+    else if (rsi > 60) score -= 15;
+    else if (rsi < 40) score += 15;
+    else if (rsi > 50) score += 5;
+    else score -= 5;
+
+    // 3. 52-week Range Position (weight 15%)
+    if (stock.wk52High && stock.wk52Low) {
+        const rangePct = (p - stock.wk52Low) / (stock.wk52High - stock.wk52Low) * 100;
+        if (rangePct < 20) score += 15;      // near 52w low → potential buy
+        else if (rangePct > 80) score -= 15; // near 52w high → potential sell
+    }
+
+    // 4. Short-term (10-day) Range + Price Action (weight 15%)
+    if (stock.tenDayHigh && stock.tenDayLow) {
+        const tenDayPct = (p - stock.tenDayLow) / (stock.tenDayHigh - stock.tenDayLow) * 100;
+        if (tenDayPct < 25) score += 8;      // near 10-day low
+        else if (tenDayPct > 75) score -= 8;
+    }
+    if (stock.dayHigh && stock.dayLow) {
+        const dayPct = (p - stock.dayLow) / (stock.dayHigh - stock.dayLow) * 100;
+        if (dayPct < 30 && String(stock.change).startsWith('-')) score -= 10; // closed weak
+        if (dayPct > 70 && !String(stock.change).startsWith('-')) score += 10; // closed strong
+    }
+
+    // Final mapping
+    let text = 'HOLD';
+    let colorFn = chalk.yellow;
+    if (score >= 60) { text = 'STRONG BUY'; colorFn = chalk.green.bold; }
+    else if (score >= 30) { text = 'BUY'; colorFn = chalk.green; }
+    else if (score <= -60) { text = 'STRONG SELL'; colorFn = chalk.red.bold; }
+    else if (score <= -30) { text = 'SELL'; colorFn = chalk.red; }
+    else if (score >= 10) { text = 'MILD BUY'; colorFn = chalk.green; }
+    else if (score <= -10) { text = 'MILD SELL'; colorFn = chalk.red; }
+
+    return colorFn(text);
+}
+
+// 5. Alert Logic (unchanged)
 function checkAlert(stock) {
     const target = config.targets[stock.code];
     if (!target) return chalk.gray("-");
@@ -97,18 +172,15 @@ function checkAlert(stock) {
     const preClose = stock.preClose;
     const lastAlertTime = config.lastAlerted[stock.code] || 0;
     const now = Date.now();
-    const cooldown = 15 * 60 * 1000; // 15 mins
+    const cooldown = 15 * 60 * 1000;
 
     let triggered = false;
     let msg = "";
 
-    // Target is a "Ceiling" (Price crossing UP)
     if (target > preClose && current >= target) {
         triggered = true;
         msg = `reached (UP)`;
-    } 
-    // Target is a "Floor" (Price crossing DOWN)
-    else if (target < preClose && current <= target) {
+    } else if (target < preClose && current <= target) {
         triggered = true;
         msg = `dropped to (DOWN)`;
     }
@@ -128,15 +200,21 @@ function checkAlert(stock) {
     return chalk.cyan(`${arrow} [T: ${target}]`);
 }
 
-// 5. UI Rendering (Repositioning cursor to prevent input flash)
+// 6. UI Rendering – Signal column now shows composite BUY/SELL/HOLD
 async function displayTable() {
-    // Move cursor to top-left and clear downwards
     readline.cursorTo(process.stdout, 0, 0);
     readline.clearScreenDown(process.stdout);
 
     const head = [chalk.cyan('Code')];
     if (config.showNames) head.push(chalk.cyan('Name'));
-    head.push(chalk.cyan('Price'), chalk.cyan('Chg'), chalk.cyan('%'), chalk.cyan('Alert Target'), chalk.cyan('Time'));
+    head.push(
+        chalk.cyan('Price'),
+        chalk.cyan('Chg'),
+        chalk.cyan('%'),
+        chalk.cyan('Alert Target'),
+        chalk.cyan('Signal'),      // Composite signal for every stock
+        chalk.cyan('Time')
+    );
 
     const tableOptions = { head };
     if (config.compactMode) {
@@ -154,25 +232,31 @@ async function displayTable() {
             
             const row = [stock.code];
             if (config.showNames) row.push(stock.name);
-            row.push(chalk.bold(stock.price.toFixed(3)), color(stock.change), color(stock.percent), checkAlert(stock), chalk.gray(stock.time));
+            row.push(
+                chalk.bold(stock.price.toFixed(3)),
+                color(stock.change),
+                color(stock.percent),
+                checkAlert(stock),
+                getTechnicalSignal(stock),   // ← Composite signal for this stock
+                chalk.gray(stock.time)
+            );
             table.push(row);
         }
     }
 
-    process.stdout.write(chalk.yellow.bold(`\n   HK REAL-TIME TERMINAL\n`));
+    process.stdout.write(chalk.yellow.bold(`\n   HK REAL-TIME TERMINAL – COMPOSITE TECHNICAL SIGNALS\n`));
     process.stdout.write(table.toString() + "\n");
     process.stdout.write(chalk.white(`   Commands: `) + 
                 chalk.green(`a [code]`) + ` | ` + 
                 chalk.red(`r [code]`) + ` | ` + 
                 chalk.magenta(`t [code] [price]`) + ` | ` + 
-                chalk.yellow(`ua [code]\n`));
+                chalk.yellow(`ua [code] | name | compact\n`));
     
-    // Refresh the user's current typing line at the bottom
     const timeStr = new Date().toLocaleTimeString();
     rl.setPrompt(chalk.gray(`   Last Sync: ${timeStr} > `));
     rl.prompt(true); 
 }
 
-// Refresh every 5 seconds
+// Start monitoring
 displayTable();
 setInterval(displayTable, 5000);
