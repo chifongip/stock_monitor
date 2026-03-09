@@ -1,0 +1,24 @@
+{
+  "name": "stock-app",
+  "version": "0.0.0",
+  "description": "Realtime stock monitor",
+  "main": "terminal-stock-alert.js",
+  "bin": "terminal-stock-alert.js",
+  "scripts": {
+    "start": "node terminal-stock-alert.js",
+    "build": "pkg . --targets node18-linux-x64,node18-macos-x64,node18-win-x64"
+  },
+  "pkg": {
+    "assets": [
+      "node_modules/node-notifier/vendor/**",
+      "node_modules/axios/dist/node/axios.cjs",
+      "node_modules/axios/dist/browser/axios.esm.js",
+      "node_modules/axios/lib/**/*",
+      "node_modules/axios/index.js",
+      "node_modules/axios/package.json"
+    ]
+  },
+  "dependencies": {
+    "axios": "^1.13.6"
+  }
+}
