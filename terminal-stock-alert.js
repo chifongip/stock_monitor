@@ -13,8 +13,12 @@ let config = {
     targets: {},
     lastAlerted: {},
     targetSetTime: {},                    // ← NEW: timestamp when target was last set/updated
+    lastPrice: {},                        // ← NEW (required by checkAlert)
     showNames: true,
-    compactMode: false
+    compactMode: false,
+    sortingMode: false,                   // ← NEW for sorting feature
+    selectedIndex: 0,                     // ← NEW
+    movingIndex: null                     // ← NEW (when dragging a stock)
 };
 
 if (fs.existsSync(CONFIG_FILE)) {
@@ -25,48 +29,133 @@ if (fs.existsSync(CONFIG_FILE)) {
     } catch (e) { saveConfig(); }
 }
 
-// 2. Setup Interface
+// ==================== NEW: INPUT HANDLING FOR SORTING MODE ====================
 const rl = readline.createInterface({ 
     input: process.stdin, 
     output: process.stdout, 
     terminal: true 
 });
 
-rl.on('line', (line) => {
+let currentRl = rl; // we will replace it when entering sorting mode
+
+function enterSortingMode() {
+    currentRl.close();
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.on('data', handleSortingKey);
+}
+
+function exitSortingMode() {
+    process.stdin.removeListener('data', handleSortingKey);
+    process.stdin.setRawMode(false);
+    currentRl = readline.createInterface({ 
+        input: process.stdin, 
+        output: process.stdout, 
+        terminal: true 
+    });
+    currentRl.on('line', handleLineInput);
+    currentRl.prompt(true);
+}
+
+function handleLineInput(line) {
     const input = line.trim().split(/\s+/);
     const cmd = input[0].toLowerCase();
     const code = input[1] ? input[1].padStart(5, '0') : null;
     const val = input[2];
 
+    // === NEW COMMAND: s or sort to toggle sorting mode ===
+    if (cmd === 's' || cmd === 'sort') {
+        config.sortingMode = !config.sortingMode;
+        config.selectedIndex = 0;
+        config.movingIndex = null;
+        saveConfig();
+        if (config.sortingMode) {
+            enterSortingMode();
+        } else {
+            exitSortingMode();
+        }
+        displayTable();
+        return;
+    }
+
+    // === ALL YOUR ORIGINAL COMMANDS (unchanged) ===
     if (cmd === 'a' && code) {
         if (!config.stocks.includes(code)) config.stocks.push(code);
     } else if (cmd === 'r' && code) {
         config.stocks = config.stocks.filter(s => s !== code);
         delete config.targets[code];
         delete config.lastAlerted[code];
-        delete config.targetSetTime[code];          // ← NEW
+        delete config.targetSetTime[code];
     } else if (cmd === 't' && code && val) {
         config.targets[code] = parseFloat(val);
         delete config.lastAlerted[code];
-        config.targetSetTime[code] = Date.now();    // ← NEW: record set time
+        config.targetSetTime[code] = Date.now();
     } else if (cmd === 'ua' && code) {
         delete config.targets[code];
         delete config.lastAlerted[code];
-        delete config.targetSetTime[code];          // ← NEW
+        delete config.targetSetTime[code];
     } else if (cmd === 'name') {
         config.showNames = !config.showNames;
     } else if (cmd === 'compact') {
         config.compactMode = !config.compactMode;
     }
+
     saveConfig();
     displayTable(); 
-});
+}
+
+function handleSortingKey(key) {
+    const str = key.toString();
+
+    if (str === '\u001B[A') { // ↑ arrow
+        if (config.movingIndex !== null) {
+            if (config.movingIndex > 0) {
+                [config.stocks[config.movingIndex], config.stocks[config.movingIndex-1]] = 
+                [config.stocks[config.movingIndex-1], config.stocks[config.movingIndex]];
+                config.movingIndex--;
+            }
+        } else {
+            config.selectedIndex = Math.max(0, config.selectedIndex - 1);
+        }
+    } 
+    else if (str === '\u001B[B') { // ↓ arrow
+        if (config.movingIndex !== null) {
+            if (config.movingIndex < config.stocks.length - 1) {
+                [config.stocks[config.movingIndex], config.stocks[config.movingIndex+1]] = 
+                [config.stocks[config.movingIndex+1], config.stocks[config.movingIndex]];
+                config.movingIndex++;
+            }
+        } else {
+            config.selectedIndex = Math.min(config.stocks.length - 1, config.selectedIndex + 1);
+        }
+    } 
+    else if (str === ' ') { // Space = select / move
+        if (config.movingIndex === null) {
+            config.movingIndex = config.selectedIndex;   // pick up the stock
+        } else {
+            config.movingIndex = null;                   // drop it
+            saveConfig();
+        }
+    } 
+    else if (str === '\r' || str === '\n' || str === 's' || str === 'q' || str === '\u001B') {
+        // Enter / s / q / Esc = exit sorting mode
+        config.sortingMode = false;
+        config.movingIndex = null;
+        saveConfig();
+        exitSortingMode();
+    }
+
+    displayTable();
+}
+
+// Start in normal mode
+currentRl.on('line', handleLineInput);
 
 function saveConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(config));
 }
 
-// 3. Data Fetching – ENHANCED with more fields for composite signals
+// 3. Data Fetching – ENHANCED with more fields for composite signals (UNCHANGED)
 async function getHKRealTimePrice(code) {
     const url = `https://realtime-money18-cdn.on.cc/securityQuote/genStockDetailHKJSON.php?stockcode=${code}`;
     try {
@@ -106,7 +195,7 @@ async function getHKRealTimePrice(code) {
     }
 }
 
-// 4. COMPOSITE TECHNICAL SIGNAL – Works for ALL stocks
+// 4. COMPOSITE TECHNICAL SIGNAL – Works for ALL stocks (UNCHANGED)
 function getTechnicalSignal(stock) {
     if (!stock.ma10 || !stock.ma20 || !stock.ma50 || !stock.rsi14) {
         return chalk.gray('N/A');
@@ -159,7 +248,7 @@ function getTechnicalSignal(stock) {
     return colorFn(text);
 }
 
-// 5. Alert Logic – with grace period after setting target
+// 5. Alert Logic – with grace period after setting target (UNCHANGED)
 function checkAlert(stock) {
     const target = config.targets[stock.code];
     if (!target) return chalk.gray("-");
@@ -171,8 +260,7 @@ function checkAlert(stock) {
     const now = Date.now();
     const cooldown = 15 * 60 * 1000;
 
-    // Grace period: skip alert if target was set very recently (avoid immediate trigger)
-    const justSet = (now - targetSetTimestamp < 10000); // 10 seconds
+    const justSet = (now - targetSetTimestamp < 10000);
 
     let triggered = false;
     let msg = "";
@@ -208,12 +296,13 @@ function checkAlert(stock) {
     return chalk.cyan(`${arrow} [T: ${target}]`);
 }
 
-// 6. UI Rendering – Signal column now shows composite BUY/SELL/HOLD
+// 6. UI Rendering – NOW SUPPORTS SORTING MODE (only small addition)
 async function displayTable() {
     readline.cursorTo(process.stdout, 0, 0);
     readline.clearScreenDown(process.stdout);
 
-    const head = [chalk.cyan('Code')];
+    const head = config.sortingMode ? [chalk.cyan(' ')] : [];   // ← checkbox column
+    head.push(chalk.cyan('Code'));
     if (config.showNames) head.push(chalk.cyan('Name'));
     head.push(
         chalk.cyan('Price'),
@@ -232,37 +321,57 @@ async function displayTable() {
 
     const table = new Table(tableOptions);
 
-    for (const code of config.stocks) {
+    for (let i = 0; i < config.stocks.length; i++) {
+        const code = config.stocks[i];
         const stock = await getHKRealTimePrice(code);
-        if (stock) {
-            const isUp = !String(stock.change).startsWith('-');
-            const color = isUp ? chalk.green : chalk.red;
-            
-            const row = [stock.code];
-            if (config.showNames) row.push(stock.name);
-            row.push(
-                chalk.bold(stock.price.toFixed(3)),
-                color(stock.change),
-                color(stock.percent),
-                checkAlert(stock),
-                getTechnicalSignal(stock),
-                chalk.gray(stock.time)
-            );
-            table.push(row);
+        if (!stock) continue;
+
+        const isUp = !String(stock.change).startsWith('-');
+        const color = isUp ? chalk.green : chalk.red;
+
+        const row = [];
+
+        // === NEW: Checkbox column when sorting ===
+        if (config.sortingMode) {
+            const isSelected = (i === config.selectedIndex);
+            const isMoving   = (i === config.movingIndex);
+            const box = isMoving ? chalk.bgYellow.black('[x]') : 
+                        isSelected ? chalk.cyan('[ ]') : '   ';
+            row.push(box);
         }
+
+        row.push(stock.code);
+        if (config.showNames) row.push(stock.name);
+        row.push(
+            chalk.bold(stock.price.toFixed(3)),
+            color(stock.change),
+            color(stock.percent),
+            checkAlert(stock),
+            getTechnicalSignal(stock),
+            chalk.gray(stock.time)
+        );
+        table.push(row);
     }
 
-    process.stdout.write(chalk.yellow.bold(`\n   HK REAL-TIME TERMINAL – COMPOSITE TECHNICAL SIGNALS\n`));
+    const title = config.sortingMode 
+        ? chalk.yellow.bold(`\n   HK REAL-TIME TERMINAL – SORTING MODE (↑↓ Space  s/q/Esc to exit)`)
+        : chalk.yellow.bold(`\n   HK REAL-TIME TERMINAL – COMPOSITE TECHNICAL SIGNALS`);
+
+    process.stdout.write(title + "\n");
     process.stdout.write(table.toString() + "\n");
-    process.stdout.write(chalk.white(`   Commands: `) + 
-                chalk.green(`a [code]`) + ` | ` + 
-                chalk.red(`r [code]`) + ` | ` + 
-                chalk.magenta(`t [code] [price]`) + ` | ` + 
-                chalk.yellow(`ua [code] | name | compact\n`));
-    
+
+    if (!config.sortingMode) {
+        process.stdout.write(chalk.white(`   Commands: `) + 
+            chalk.green(`a [code]`) + ` | ` + chalk.red(`r [code]`) + ` | ` + 
+            chalk.magenta(`t [code] [price]`) + ` | ` + chalk.yellow(`ua [code]\n`) +
+            chalk.blue(`   Options: name | compact | s (sort)\n`));
+    }
+
     const timeStr = new Date().toLocaleTimeString();
-    rl.setPrompt(chalk.gray(`   Last Sync: ${timeStr} > `));
-    rl.prompt(true); 
+    if (!config.sortingMode && currentRl.setPrompt) {
+        currentRl.setPrompt(chalk.gray(`   Last Sync: ${timeStr} > `));
+        currentRl.prompt(true);
+    }
 }
 
 // Start monitoring
