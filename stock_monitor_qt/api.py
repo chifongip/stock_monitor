@@ -2,6 +2,8 @@ import json
 import re
 import urllib.request
 
+from .config import get_config
+
 
 def fetch_stock(code):
     url = f'https://realtime-money18-cdn.on.cc/securityQuote/genStockDetailHKJSON.php?stockcode={code}'
@@ -49,52 +51,66 @@ def fetch_stock(code):
         return None
 
 
-def get_technical_signal(stock):
+def update_stock_state(stock, config):
+    code = stock['code']
+
+    if stock['ma10'] and stock['ma20'] and stock['ma50']:
+        config['prevMA'][code] = {
+            'ma10': stock['ma10'],
+            'ma20': stock['ma20'],
+            'ma50': stock['ma50'],
+        }
+
+    prev_vol = config.get('_lastVolume', {}).get(code)
+    current_vol = stock.get('volume', 0)
+    if prev_vol is not None and current_vol > 0:
+        delta = current_vol - prev_vol
+        if delta > 0:
+            history = config['volumeHistory'].setdefault(code, [])
+            history.append(delta)
+            if len(history) > 20:
+                history.pop(0)
+
+    config.setdefault('_lastVolume', {})[code] = current_vol
+
+
+def get_technical_signal(stock, config=None):
     if not stock['ma10'] or not stock['ma20'] or not stock['ma50'] or not stock['rsi14']:
-        return 'N/A', 'gray'
+        return 'N/A', 0, 'gray'
+
+    if config is None:
+        config = get_config()
 
     p = stock['price']
     rsi = stock['rsi14']
     score = 0
 
-    above_all = p > stock['ma10'] and p > stock['ma20'] and p > stock['ma50']
-    below_all = p < stock['ma10'] and p < stock['ma20'] and p < stock['ma50']
-    if above_all:
-        score += 40
-    elif below_all:
-        score -= 40
-    elif p > stock['ma50']:
-        score += 15
-    else:
-        score -= 15
+    # 1. Granular MA scoring: +10/-10 per MA independently
+    for ma_val in [stock['ma10'], stock['ma20'], stock['ma50']]:
+        if p > ma_val:
+            score += 10
+        elif p < ma_val:
+            score -= 10
 
-    if rsi > 70:
-        score -= 30
-    elif rsi < 30:
+    # 2. RSI interpolation: linear mapping [30,70] -> [+30,-30]
+    if rsi <= 30:
         score += 30
-    elif rsi > 60:
-        score -= 15
-    elif rsi < 40:
-        score += 15
-    elif rsi > 50:
-        score += 5
+    elif rsi >= 70:
+        score -= 30
     else:
-        score -= 5
+        score += int(30 - (rsi - 30) * 60 / 40)
 
+    # 3. 52-week range: linear [0%,100%] -> [+15,-15]
     if stock['wk52High'] and stock['wk52Low'] and stock['wk52High'] != stock['wk52Low']:
         range_pct = (p - stock['wk52Low']) / (stock['wk52High'] - stock['wk52Low']) * 100
-        if range_pct < 20:
-            score += 15
-        elif range_pct > 80:
-            score -= 15
+        score += int(15 - range_pct * 30 / 100)
 
+    # 4. 10-day range: linear [0%,100%] -> [+8,-8]
     if stock['tenDayHigh'] and stock['tenDayLow'] and stock['tenDayHigh'] != stock['tenDayLow']:
         ten_day_pct = (p - stock['tenDayLow']) / (stock['tenDayHigh'] - stock['tenDayLow']) * 100
-        if ten_day_pct < 25:
-            score += 8
-        elif ten_day_pct > 75:
-            score -= 8
+        score += int(8 - ten_day_pct * 16 / 100)
 
+    # 5. Intraday momentum (unchanged)
     if stock['dayHigh'] and stock['dayLow'] and stock['dayHigh'] != stock['dayLow']:
         day_pct = (p - stock['dayLow']) / (stock['dayHigh'] - stock['dayLow']) * 100
         change_str = str(stock['change'])
@@ -103,20 +119,69 @@ def get_technical_signal(stock):
         if day_pct > 70 and not change_str.startswith('-'):
             score += 10
 
-    if score >= 60:
-        return 'STRONG BUY', 'green_bold'
-    elif score >= 30:
-        return 'BUY', 'green'
-    elif score <= -60:
-        return 'STRONG SELL', 'red_bold'
-    elif score <= -30:
-        return 'SELL', 'red'
-    elif score >= 10:
-        return 'MILD BUY', 'green'
-    elif score <= -10:
-        return 'MILD SELL', 'red'
+    # 6. Volume confirmation
+    vol_history = config.get('volumeHistory', {}).get(stock['code'], [])
+    if vol_history and len(vol_history) >= 3:
+        avg_delta = sum(vol_history) / len(vol_history)
+        if avg_delta > 0:
+            prev_vol = config.get('_lastVolume', {}).get(stock['code'])
+            if prev_vol:
+                current_vol = stock.get('volume', 0)
+                current_delta = current_vol - prev_vol
+                vol_ratio = current_delta / avg_delta
+                change_str = str(stock['change'])
+                is_up = not change_str.startswith('-')
+
+                if vol_ratio > 1.5:
+                    score += 10 if is_up else -10
+                elif vol_ratio > 1.0:
+                    score += 5 if is_up else -5
+                elif vol_ratio < 0.5:
+                    score += -3 if is_up else 3
+
+    # 7. MA crossover detection
+    prev = config.get('prevMA', {}).get(stock['code'])
+    if prev and prev.get('ma10') and prev.get('ma20') and prev.get('ma50'):
+        prev_10_above_20 = prev['ma10'] > prev['ma20']
+        curr_10_above_20 = stock['ma10'] > stock['ma20']
+        if not prev_10_above_20 and curr_10_above_20:
+            score += 8
+        elif prev_10_above_20 and not curr_10_above_20:
+            score -= 8
+
+        prev_20_above_50 = prev['ma20'] > prev['ma50']
+        curr_20_above_50 = stock['ma20'] > stock['ma50']
+        if not prev_20_above_50 and curr_20_above_50:
+            score += 12
+        elif prev_20_above_50 and not curr_20_above_50:
+            score -= 12
+
+    # 8. Trend strength: MA10-MA50 spread as % of price
+    if stock['ma50']:
+        spread_pct = (stock['ma10'] - stock['ma50']) / p * 100
+        clamped = max(-2.0, min(2.0, spread_pct))
+        score += int(clamped * 4)
+
+    # 9. Mean reversion: price deviation from MA20, inverted
+    if stock['ma20']:
+        deviation_pct = (p - stock['ma20']) / stock['ma20'] * 100
+        clamped = max(-5.0, min(5.0, deviation_pct))
+        score += int(-clamped * 8 / 5)
+
+    if score >= 75:
+        return 'STRONG BUY', score, 'green_bold'
+    elif score >= 35:
+        return 'BUY', score, 'green'
+    elif score <= -75:
+        return 'STRONG SELL', score, 'red_bold'
+    elif score <= -35:
+        return 'SELL', score, 'red'
+    elif score >= 12:
+        return 'MILD BUY', score, 'green'
+    elif score <= -12:
+        return 'MILD SELL', score, 'red'
     else:
-        return 'HOLD', 'yellow'
+        return 'HOLD', score, 'yellow'
 
 
 def check_alert(stock, cfg):

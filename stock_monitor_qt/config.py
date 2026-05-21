@@ -16,6 +16,8 @@ DEFAULT_CONFIG = {
     'lastPrice': {},
     'showNames': True,
     'compactMode': False,
+    'prevMA': {},
+    'volumeHistory': {},
 }
 
 _config = dict(DEFAULT_CONFIG)
@@ -63,6 +65,8 @@ def remove_stock(code):
         _config['lastAlerted'].pop(code, None)
         _config['targetSetTime'].pop(code, None)
         _config['lastPrice'].pop(code, None)
+        _config['prevMA'].pop(code, None)
+        _config['volumeHistory'].pop(code, None)
         save_config()
         return True
     return False

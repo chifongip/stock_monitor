@@ -4,27 +4,65 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Terminal-based real-time Hong Kong stock monitor with price alerts and technical analysis signals. Single-file Node.js application (`terminal-stock-alert.js`) that renders a live-updating table in the terminal.
+Real-time Hong Kong stock monitor with price alerts and composite technical analysis signals. Python/PyQt5 desktop application (`stock_monitor_qt/`).
 
 ## Commands
 
-- `npm start` — Run the application
-- `npm run build` — Compile standalone binaries (Linux/macOS/Windows) via `pkg`
+- `python3 -m stock_monitor_qt` — Run the application
+- `python3 run.py` — Alternative entry point
 
-No test framework, linter, or CI is configured.
+No test framework, linter, or CI is configured. Only external dependency: `PyQt5`.
 
 ## Architecture
 
-Everything lives in `terminal-stock-alert.js` (379 lines). Key sections:
+### Files
 
-1. **Config management** — Loads/saves `stocks.json` (tracked stock codes, alert targets, UI prefs like `compactMode`, `showNames`, `sortingMode`).
-2. **Input handling** — Two modes: normal (readline commands: `a` add, `r` remove, `t` set target, `ua` unset alert, `name`/`compact`/`s` toggles) and sorting (raw stdin with arrow keys for reordering).
-3. **Data fetching** (`getHKRealTimePrice`) — Pulls from `realtime-money18-cdn.on.cc` API. Returns price, change, MA10/20/50, RSI14, 52-week/10-day highs/lows, daily range, volume.
-4. **Technical analysis** (`getTechnicalSignal`) — Composite score from MA position, RSI, 52-week range, 10-day range, and intraday momentum. Outputs STRONG BUY through STRONG SELL.
-5. **Alert system** (`checkAlert`) — Fires desktop notification via `node-notifier` when price crosses a user-set target. Has 10s grace period on new targets and 15-min cooldown between alerts.
-6. **UI rendering** (`displayTable`) — Redraws `cli-table3` table every 5 seconds. Supports compact mode and sorting mode with checkbox column.
-7. **Main loop** — `setInterval` at 5000ms calling `displayTable()`.
+| File | Purpose |
+|------|---------|
+| `stock_monitor_qt/api.py` | Data fetching (`fetch_stock`), signal generation (`get_technical_signal`), alert logic (`check_alert`), state persistence (`update_stock_state`) |
+| `stock_monitor_qt/config.py` | Configuration persistence (`stocks.json`). Manages stock list, alert targets, MA history, volume history, UI prefs |
+| `stock_monitor_qt/main.py` | PyQt5 `QMainWindow`, 5s refresh loop, command input handling, desktop notifications |
+| `stock_monitor_qt/widgets.py` | `QTableWidget` subclass, colors, table rendering, drag-and-drop reorder, context menu |
+| `stocks.json` | Runtime config (stock codes, targets, last prices, prevMA, volumeHistory) |
 
-## Dependency Note
+### Data Flow
 
-`cli-table3`, `chalk`, and `node-notifier` are used in code but **not listed in `package.json`**. A clean `npm install` from the manifest alone will fail at runtime. These must be added to `package.json` dependencies before rebuilding.
+1. `_refresh()` fires every 5s, spawns `FetchWorker` per stock via `QThreadPool`
+2. `fetch_stock(code)` pulls from Money18 API (`realtime-money18-cdn.on.cc`)
+3. `_on_stock_fetched()` processes result: `check_alert()`, `update_stock_state()`, `get_technical_signal()`
+4. `update_stock_row()` updates the table display
+
+### Signal Generation (`get_technical_signal`)
+
+9 scoring components (total range: -131 to +131):
+
+| # | Component | Range | Description |
+|---|-----------|-------|-------------|
+| 1 | Granular MA | -30 to +30 | +10/-10 per MA independently (MA10, MA20, MA50) |
+| 2 | RSI interpolation | -30 to +30 | Linear mapping RSI [30,70] -> [+30,-30], flat at extremes |
+| 3 | 52-week range | -15 to +15 | Linear [0%,100%] -> [+15,-15] |
+| 4 | 10-day range | -8 to +8 | Linear [0%,100%] -> [+8,-8] |
+| 5 | Intraday momentum | -10 to +10 | Binary: strong move at day extremes confirms direction |
+| 6 | Volume confirmation | -10 to +10 | Compares current volume delta rate vs rolling 20-sample avg |
+| 7 | MA crossover | -12 to +12 | Detects MA10/MA20 and MA20/MA50 crossovers from previous refresh |
+| 8 | Trend strength | -8 to +8 | MA10-MA50 spread as % of price, clamped to +/-2% |
+| 9 | Mean reversion | -8 to +8 | Price deviation from MA20, inverted (far above = bearish) |
+
+Signal thresholds: >=75 STRONG BUY, >=35 BUY, >=12 MILD BUY, -11 to +11 HOLD, <=-12 MILD SELL, <=-35 SELL, <=-75 STRONG SELL.
+
+### State Persistence (`update_stock_state`)
+
+- `prevMA`: Previous MA values for crossover detection (dict per stock code)
+- `volumeHistory`: Rolling window of 20 volume deltas for volume confirmation
+- `_lastVolume`: Transient working dict for delta computation (not persisted to JSON)
+
+### Alert System (`check_alert`)
+
+User-configured price targets. Fires desktop notification via `notify-send` when price crosses target. 10s grace period on new targets, 15-min cooldown between alerts.
+
+### UI Features
+
+- Dark theme, optional color mode, compact mode, name column toggle
+- Drag-and-drop row reordering (persisted to config)
+- Right-click context menu (set target, unset alert, remove stock)
+- Command input: `a [code]`, `r [code]`, `t [code] [price]`, `ua [code]`, `name`, `compact`, `color`

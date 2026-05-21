@@ -14,7 +14,7 @@ from .config import (
     add_stock, remove_stock, set_target, unset_alert,
     update_last_price, set_alert_fired, reorder_stocks,
 )
-from .api import fetch_stock, get_technical_signal, check_alert
+from .api import fetch_stock, get_technical_signal, check_alert, update_stock_state
 from .widgets import StockTable, COLORS
 
 
@@ -158,7 +158,9 @@ class StockMonitorWindow(QMainWindow):
 
         update_last_price(code, stock['price'])
 
-        signal_text, signal_color = get_technical_signal(stock)
+        update_stock_state(stock, self.cfg)
+
+        signal_text, signal_score, signal_color = get_technical_signal(stock, self.cfg)
 
         self.table.update_stock_row(row, stock, alert_text, alert_color, signal_text, signal_color, alert_fired)
 
