@@ -1,0 +1,29 @@
+.stock-monitor-panel-label {
+    min-width: 9em;
+}
+
+.stock-monitor-row {
+    spacing: 12px;
+    min-width: 22em;
+}
+
+.stock-monitor-row-details {
+    min-width: 12em;
+}
+
+.stock-monitor-positive {
+    color: #33d17a;
+}
+
+.stock-monitor-negative {
+    color: #ff7b63;
+}
+
+.stock-monitor-neutral,
+.stock-monitor-status {
+    color: #b8b8b8;
+}
+
+.stock-monitor-error {
+    color: #ff7b63;
+}

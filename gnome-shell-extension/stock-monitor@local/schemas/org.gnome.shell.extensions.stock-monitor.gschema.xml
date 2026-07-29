@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.stock-monitor" path="/org/gnome/shell/extensions/stock-monitor/">
+    <key name="symbols" type="as">
+      <default>['02800', '09988', '00700']</default>
+      <summary>Hong Kong stock codes to display</summary>
+      <description>Stock codes are stored as five-digit strings in display order.</description>
+    </key>
+    <key name="refresh-interval" type="u">
+      <default>60</default>
+      <range min="15" max="3600"/>
+      <summary>Quote refresh interval in seconds</summary>
+      <description>How often the extension requests the latest stock prices.</description>
+    </key>
+  </schema>
+</schemalist>

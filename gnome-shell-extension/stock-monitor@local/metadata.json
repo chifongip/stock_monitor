@@ -1,0 +1,7 @@
+{
+  "uuid": "stock-monitor@local",
+  "name": "Stock Monitor",
+  "description": "Shows live Hong Kong stock prices in the top bar.",
+  "shell-version": ["42"],
+  "settings-schema": "org.gnome.shell.extensions.stock-monitor"
+}

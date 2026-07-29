@@ -1,3 +1,5 @@
 stock-app-*
 node_modules/
 package-lock.json
+gnome-shell-extension/build/
+gnome-shell-extension/stock-monitor@local/schemas/gschemas.compiled
