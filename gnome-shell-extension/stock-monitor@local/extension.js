@@ -3,6 +3,7 @@
 const {Clutter, Gio, GLib, Soup, St} = imports.gi;
 const ByteArray = imports.byteArray;
 const ExtensionUtils = imports.misc.extensionUtils;
+const Me = ExtensionUtils.getCurrentExtension();
 const Main = imports.ui.main;
 const PanelMenu = imports.ui.panelMenu;
 const PopupMenu = imports.ui.popupMenu;
@@ -304,6 +305,12 @@ class StockMonitorExtension {
         const refreshItem = new PopupMenu.PopupMenuItem('Refresh now');
         refreshItem.connect('activate', () => this._refreshQuotes());
         this._indicator.menu.addMenuItem(refreshItem);
+
+        const exitItem = new PopupMenu.PopupMenuItem('Exit');
+        exitItem.connect('activate', () => {
+            Main.extensionManager.disableExtension(Me.uuid);
+        });
+        this._indicator.menu.addMenuItem(exitItem);
     }
 
     _addStatusItem(text, styleClass) {
