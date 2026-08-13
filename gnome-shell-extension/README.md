@@ -22,8 +22,11 @@ Enter. Then run:
 make extension-enable
 ```
 
-Open the extension's Preferences to edit the watchlist and refresh interval.
-Enter one Hong Kong stock code per line; `700` is normalized to `00700`.
+Open the extension's Preferences to edit the watchlist, refresh interval, and
+optional scheduled active hours. Enter one Hong Kong stock code per line; `700`
+is normalized to `00700`. Scheduled hours use local 24-hour time every day;
+overnight ranges are supported (for example, `22:00` to `06:00`). Equal start
+and end times keep monitoring active all day.
 
 ## Development
 

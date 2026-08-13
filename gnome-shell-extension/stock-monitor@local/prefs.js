@@ -6,6 +6,19 @@ const ExtensionUtils = imports.misc.extensionUtils;
 const REFRESH_MINIMUM_SECONDS = 15;
 const REFRESH_MAXIMUM_SECONDS = 3600;
 
+function normaliseTime(value) {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+    if (!match)
+        return null;
+
+    const hours = Number.parseInt(match[1], 10);
+    const minutes = Number.parseInt(match[2], 10);
+    if (hours > 23 || minutes > 59)
+        return null;
+
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
 function normaliseSymbols(text) {
     const seen = new Set();
     return text.split(/[\n,\s]+/)
@@ -62,6 +75,60 @@ function fillPreferencesWindow(window) {
     watchlistGroup.add(symbolsRow);
     watchlistGroup.add(refreshRow);
     page.add(watchlistGroup);
+
+    const scheduleGroup = new Adw.PreferencesGroup({
+        title: 'Scheduled active hours',
+        description: 'Hide the indicator and pause price updates outside this daily local-time range.',
+    });
+    const scheduleRow = new Adw.ActionRow({
+        title: 'Enable scheduled hours',
+        subtitle: 'The extension resumes automatically at the start time.',
+    });
+    const scheduleSwitch = new Gtk.Switch({
+        active: settings.get_boolean('schedule-enabled'),
+        valign: Gtk.Align.CENTER,
+    });
+    settings.bind('schedule-enabled', scheduleSwitch, 'active', Gio.SettingsBindFlags.DEFAULT);
+    scheduleRow.add_suffix(scheduleSwitch);
+    scheduleRow.set_activatable_widget(scheduleSwitch);
+
+    const addTimeRow = (title, key) => {
+        const row = new Adw.ActionRow({
+            title,
+            subtitle: '24-hour local time (HH:MM)',
+        });
+        const entry = new Gtk.Entry({
+            text: settings.get_string(key),
+            width_chars: 5,
+            max_length: 5,
+            valign: Gtk.Align.CENTER,
+            placeholder_text: 'HH:MM',
+        });
+        const saveTime = () => {
+            const time = normaliseTime(entry.get_text());
+            if (!time) {
+                entry.add_css_class('error');
+                return;
+            }
+
+            entry.remove_css_class('error');
+            if (entry.get_text() !== time)
+                entry.set_text(time);
+            if (settings.get_string(key) !== time)
+                settings.set_string(key, time);
+        };
+        entry.connect('changed', saveTime);
+        entry.connect('activate', saveTime);
+        settings.bind('schedule-enabled', row, 'sensitive', Gio.SettingsBindFlags.DEFAULT);
+        row.add_suffix(entry);
+        row.set_activatable_widget(entry);
+        scheduleGroup.add(row);
+    };
+
+    scheduleGroup.add(scheduleRow);
+    addTimeRow('Start time', 'schedule-start');
+    addTimeRow('End time', 'schedule-end');
+    page.add(scheduleGroup);
     window.add(page);
 
     const openEditor = () => {

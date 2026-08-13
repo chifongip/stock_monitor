@@ -37,6 +37,19 @@ function quoteStyle(change) {
     return 'stock-monitor-neutral';
 }
 
+function timeToMinutes(value) {
+    const match = /^(\d{2}):(\d{2})$/.exec(String(value));
+    if (!match)
+        return null;
+
+    const hours = Number.parseInt(match[1], 10);
+    const minutes = Number.parseInt(match[2], 10);
+    if (hours > 23 || minutes > 59)
+        return null;
+
+    return hours * 60 + minutes;
+}
+
 class StockMonitorExtension {
     constructor() {
         this._settings = ExtensionUtils.getSettings();
@@ -48,6 +61,7 @@ class StockMonitorExtension {
         this._panelLabel = null;
         this._refreshTimerId = 0;
         this._rotationTimerId = 0;
+        this._scheduleTimerId = 0;
         this._rotationIndex = 0;
         this._refreshInFlight = false;
         this._refreshQueued = false;
@@ -56,6 +70,7 @@ class StockMonitorExtension {
         this._lastError = null;
         this._settingsSignals = [];
         this._enabled = false;
+        this._scheduleActive = null;
     }
 
     enable() {
@@ -82,14 +97,15 @@ class StockMonitorExtension {
             }),
             this._settings.connect('changed::refresh-interval', () => {
                 this._refreshGeneration++;
-                this._startRefreshTimer();
+                this._applySchedule();
                 this._refreshQuotes();
-            })
+            }),
+            this._settings.connect('changed::schedule-enabled', () => this._applySchedule()),
+            this._settings.connect('changed::schedule-start', () => this._applySchedule()),
+            this._settings.connect('changed::schedule-end', () => this._applySchedule())
         );
 
-        this._startRefreshTimer();
-        this._startRotationTimer();
-        this._refreshQuotes();
+        this._applySchedule();
     }
 
     disable() {
@@ -98,6 +114,7 @@ class StockMonitorExtension {
         this._cancellable.cancel();
         this._removeTimer('_refreshTimerId');
         this._removeTimer('_rotationTimerId');
+        this._removeTimer('_scheduleTimerId');
 
         for (const signalId of this._settingsSignals)
             this._settings.disconnect(signalId);
@@ -134,6 +151,95 @@ class StockMonitorExtension {
         return Math.max(REFRESH_MINIMUM_SECONDS, this._settings.get_uint('refresh-interval'));
     }
 
+    _scheduleTimes() {
+        if (!this._settings.get_boolean('schedule-enabled'))
+            return null;
+
+        const start = timeToMinutes(this._settings.get_string('schedule-start'));
+        const end = timeToMinutes(this._settings.get_string('schedule-end'));
+        if (start === null || end === null)
+            return null;
+
+        return {start, end};
+    }
+
+    _isWithinScheduledHours() {
+        const schedule = this._scheduleTimes();
+        if (!schedule || schedule.start === schedule.end)
+            return true;
+
+        const now = new Date();
+        const current = now.getHours() * 60 + now.getMinutes();
+        if (schedule.start < schedule.end)
+            return current >= schedule.start && current < schedule.end;
+
+        return current >= schedule.start || current < schedule.end;
+    }
+
+    _secondsUntilScheduleChange() {
+        const schedule = this._scheduleTimes();
+        if (!schedule || schedule.start === schedule.end)
+            return 0;
+
+        const now = new Date();
+        const currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+        const boundaries = [schedule.start * 60, schedule.end * 60];
+        const seconds = boundaries.map(boundary => {
+            let remaining = boundary - currentSeconds;
+            if (remaining <= 0)
+                remaining += 24 * 60 * 60;
+            return remaining;
+        });
+        return Math.max(1, Math.min(...seconds));
+    }
+
+    _applySchedule() {
+        const active = this._isWithinScheduledHours();
+        const changed = active !== this._scheduleActive;
+        this._scheduleActive = active;
+        this._startScheduleTimer();
+
+        if (!active) {
+            this._removeTimer('_refreshTimerId');
+            this._removeTimer('_rotationTimerId');
+            this._cancelRefresh();
+            this._indicator?.hide();
+            return;
+        }
+
+        this._indicator?.show();
+        this._startRefreshTimer();
+        this._startRotationTimer();
+        this._updateUi();
+        if (changed || this._quotes.size === 0)
+            this._refreshQuotes();
+    }
+
+    _startScheduleTimer() {
+        this._removeTimer('_scheduleTimerId');
+        const seconds = this._secondsUntilScheduleChange();
+        if (!seconds)
+            return;
+
+        this._scheduleTimerId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT,
+            seconds,
+            () => {
+                this._scheduleTimerId = 0;
+                this._applySchedule();
+                return GLib.SOURCE_REMOVE;
+            }
+        );
+    }
+
+    _cancelRefresh() {
+        this._refreshGeneration++;
+        this._refreshQueued = false;
+        this._loading = false;
+        this._cancellable.cancel();
+        this._cancellable = new Gio.Cancellable();
+    }
+
     _startRefreshTimer() {
         this._removeTimer('_refreshTimerId');
         this._refreshTimerId = GLib.timeout_add_seconds(
@@ -167,7 +273,7 @@ class StockMonitorExtension {
     }
 
     async _refreshQuotes() {
-        if (!this._enabled)
+        if (!this._enabled || !this._scheduleActive)
             return;
 
         if (this._refreshInFlight) {
@@ -210,7 +316,7 @@ class StockMonitorExtension {
             this._updateUi();
         } finally {
             this._refreshInFlight = false;
-            if (this._enabled && this._refreshQueued) {
+            if (this._enabled && this._scheduleActive && this._refreshQueued) {
                 this._refreshQueued = false;
                 this._refreshQuotes();
             }

@@ -12,5 +12,20 @@
       <summary>Quote refresh interval in seconds</summary>
       <description>How often the extension requests the latest stock prices.</description>
     </key>
+    <key name="schedule-enabled" type="b">
+      <default>false</default>
+      <summary>Restrict monitoring to scheduled hours</summary>
+      <description>Hide the indicator and pause quote requests outside the configured daily active hours.</description>
+    </key>
+    <key name="schedule-start" type="s">
+      <default>'09:30'</default>
+      <summary>Scheduled monitoring start time</summary>
+      <description>Local time in 24-hour HH:MM format.</description>
+    </key>
+    <key name="schedule-end" type="s">
+      <default>'16:00'</default>
+      <summary>Scheduled monitoring end time</summary>
+      <description>Local time in 24-hour HH:MM format.</description>
+    </key>
   </schema>
 </schemalist>
