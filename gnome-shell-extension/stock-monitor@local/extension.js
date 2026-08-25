@@ -13,6 +13,7 @@ const ROTATION_SECONDS = 10;
 const QUOTE_URL = 'https://realtime-money18-cdn.on.cc/securityQuote/genStockDetailHKJSON.php?stockcode=';
 const REFERER = 'https://money18.on.cc/';
 const USER_AGENT = 'Mozilla/5.0 (GNOME Shell Stock Monitor)';
+const WEEKDAY_IDS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 let extension = null;
 
@@ -48,6 +49,16 @@ function timeToMinutes(value) {
         return null;
 
     return hours * 60 + minutes;
+}
+
+function weekdayId(date) {
+    return WEEKDAY_IDS[date.getDay()];
+}
+
+function dateAtMinutes(day, minutes) {
+    const date = new Date(day);
+    date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+    return date;
 }
 
 class StockMonitorExtension {
@@ -102,7 +113,8 @@ class StockMonitorExtension {
             }),
             this._settings.connect('changed::schedule-enabled', () => this._applySchedule()),
             this._settings.connect('changed::schedule-start', () => this._applySchedule()),
-            this._settings.connect('changed::schedule-end', () => this._applySchedule())
+            this._settings.connect('changed::schedule-end', () => this._applySchedule()),
+            this._settings.connect('changed::active-days', () => this._applySchedule())
         );
 
         this._applySchedule();
@@ -160,37 +172,73 @@ class StockMonitorExtension {
         if (start === null || end === null)
             return null;
 
-        return {start, end};
+        const activeDays = new Set(this._settings.get_strv('active-days')
+            .filter(day => WEEKDAY_IDS.includes(day)));
+        return {start, end, activeDays};
     }
 
     _isWithinScheduledHours() {
         const schedule = this._scheduleTimes();
-        if (!schedule || schedule.start === schedule.end)
+        if (!schedule)
             return true;
+        if (schedule.activeDays.size === 0)
+            return false;
 
         const now = new Date();
         const current = now.getHours() * 60 + now.getMinutes();
-        if (schedule.start < schedule.end)
-            return current >= schedule.start && current < schedule.end;
+        const today = weekdayId(now);
+        if (schedule.start === schedule.end)
+            return schedule.activeDays.has(today);
 
-        return current >= schedule.start || current < schedule.end;
+        if (schedule.start < schedule.end)
+            return schedule.activeDays.has(today) &&
+                current >= schedule.start && current < schedule.end;
+
+        if (current >= schedule.start)
+            return schedule.activeDays.has(today);
+
+        const previousDay = new Date(now);
+        previousDay.setDate(previousDay.getDate() - 1);
+        return current < schedule.end && schedule.activeDays.has(weekdayId(previousDay));
     }
 
     _secondsUntilScheduleChange() {
         const schedule = this._scheduleTimes();
-        if (!schedule || schedule.start === schedule.end)
+        if (!schedule || schedule.activeDays.size === 0)
             return 0;
 
         const now = new Date();
-        const currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-        const boundaries = [schedule.start * 60, schedule.end * 60];
-        const seconds = boundaries.map(boundary => {
-            let remaining = boundary - currentSeconds;
-            if (remaining <= 0)
-                remaining += 24 * 60 * 60;
-            return remaining;
-        });
-        return Math.max(1, Math.min(...seconds));
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const boundaries = [];
+
+        // Check the preceding day for an overnight end boundary, then a full week ahead.
+        for (let offset = -1; offset <= 7; offset++) {
+            const day = new Date(today);
+            day.setDate(day.getDate() + offset);
+            if (!schedule.activeDays.has(weekdayId(day)))
+                continue;
+
+            if (schedule.start === schedule.end) {
+                const end = new Date(day);
+                end.setDate(end.getDate() + 1);
+                boundaries.push(day, end);
+                continue;
+            }
+
+            const start = dateAtMinutes(day, schedule.start);
+            const end = dateAtMinutes(day, schedule.end);
+            if (schedule.start > schedule.end)
+                end.setDate(end.getDate() + 1);
+            boundaries.push(start, end);
+        }
+
+        const nextBoundary = boundaries
+            .filter(boundary => boundary.getTime() > now.getTime())
+            .reduce((next, boundary) => !next || boundary < next ? boundary : next, null);
+        if (!nextBoundary)
+            return 0;
+
+        return Math.max(1, Math.ceil((nextBoundary.getTime() - now.getTime()) / 1000));
     }
 
     _applySchedule() {

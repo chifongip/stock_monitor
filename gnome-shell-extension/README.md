@@ -24,9 +24,11 @@ make extension-enable
 
 Open the extension's Preferences to edit the watchlist, refresh interval, and
 optional scheduled active hours. Enter one Hong Kong stock code per line; `700`
-is normalized to `00700`. Scheduled hours use local 24-hour time every day;
-overnight ranges are supported (for example, `22:00` to `06:00`). Equal start
-and end times keep monitoring active all day.
+is normalized to `00700`. Scheduled hours use local 24-hour time on the chosen
+weekdays, which default to Monday-Friday. Overnight ranges are supported (for
+example, a selected Monday `22:00` to `06:00` window remains active until
+Tuesday at `06:00`). Equal start and end times keep monitoring active all day
+on each selected weekday.
 
 ## Development
 

@@ -5,6 +5,15 @@ const ExtensionUtils = imports.misc.extensionUtils;
 
 const REFRESH_MINIMUM_SECONDS = 15;
 const REFRESH_MAXIMUM_SECONDS = 3600;
+const WEEKDAYS = [
+    {id: 'mon', label: 'Monday'},
+    {id: 'tue', label: 'Tuesday'},
+    {id: 'wed', label: 'Wednesday'},
+    {id: 'thu', label: 'Thursday'},
+    {id: 'fri', label: 'Friday'},
+    {id: 'sat', label: 'Saturday'},
+    {id: 'sun', label: 'Sunday'},
+];
 
 function normaliseTime(value) {
     const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
@@ -31,6 +40,11 @@ function normaliseSymbols(text) {
             seen.add(code);
             return true;
         });
+}
+
+function normaliseDays(days) {
+    const selected = new Set(days);
+    return WEEKDAYS.filter(day => selected.has(day.id)).map(day => day.id);
 }
 
 function init() {
@@ -126,6 +140,27 @@ function fillPreferencesWindow(window) {
     };
 
     scheduleGroup.add(scheduleRow);
+
+    for (const day of WEEKDAYS) {
+        const dayRow = new Adw.ActionRow({title: day.label});
+        const daySwitch = new Gtk.Switch({
+            active: settings.get_strv('active-days').includes(day.id),
+            valign: Gtk.Align.CENTER,
+        });
+        daySwitch.connect('notify::active', widget => {
+            const selected = new Set(settings.get_strv('active-days'));
+            if (widget.active)
+                selected.add(day.id);
+            else
+                selected.delete(day.id);
+            settings.set_strv('active-days', normaliseDays(selected));
+        });
+        settings.bind('schedule-enabled', dayRow, 'sensitive', Gio.SettingsBindFlags.DEFAULT);
+        dayRow.add_suffix(daySwitch);
+        dayRow.set_activatable_widget(daySwitch);
+        scheduleGroup.add(dayRow);
+    }
+
     addTimeRow('Start time', 'schedule-start');
     addTimeRow('End time', 'schedule-end');
     page.add(scheduleGroup);

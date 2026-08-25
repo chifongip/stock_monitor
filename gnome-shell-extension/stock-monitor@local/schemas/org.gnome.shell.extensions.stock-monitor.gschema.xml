@@ -27,5 +27,10 @@
       <summary>Scheduled monitoring end time</summary>
       <description>Local time in 24-hour HH:MM format.</description>
     </key>
+    <key name="active-days" type="as">
+      <default>['mon', 'tue', 'wed', 'thu', 'fri']</default>
+      <summary>Days when scheduled monitoring is active</summary>
+      <description>Weekday identifiers for the local scheduled monitoring window.</description>
+    </key>
   </schema>
 </schemalist>
